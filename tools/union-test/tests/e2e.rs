@@ -28,8 +28,9 @@ use ucs03_zkgm::{
     self,
     com::{
         Instruction, Stake, TokenOrderV1, TokenOrderV2, Unstake, WithdrawStake, INSTR_VERSION_0,
-        INSTR_VERSION_1, INSTR_VERSION_2, OP_STAKE, OP_TOKEN_ORDER, OP_UNSTAKE, OP_WITHDRAW_STAKE,
-        TOKEN_ORDER_KIND_ESCROW, TOKEN_ORDER_KIND_INITIALIZE, TOKEN_ORDER_KIND_UNESCROW,
+        INSTR_VERSION_1, INSTR_VERSION_2, OP_BATCH, OP_STAKE, OP_TOKEN_ORDER, OP_UNSTAKE,
+        OP_WITHDRAW_STAKE, TOKEN_ORDER_KIND_ESCROW, TOKEN_ORDER_KIND_INITIALIZE,
+        TOKEN_ORDER_KIND_UNESCROW,
     },
 };
 use union_test::{
@@ -2563,7 +2564,6 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ERC20InsufficientBalance() {
     );
 }
 
-
 async fn test_from_evm_to_union_tokenv2_unhappy_ErrInvalidUnescrow() {
     let ctx = init_ctx().await;
 
@@ -2723,7 +2723,7 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ErrInvalidUnescrow() {
             receiver: evm_address.to_vec().into(),
             base_token: "munooo".as_bytes().into(), // Which is wrong, so it will revert ErrInvalidUnescrow
             base_amount: "10".parse().unwrap(),
-            kind: TOKEN_ORDER_KIND_UNESCROW, 
+            kind: TOKEN_ORDER_KIND_UNESCROW,
             metadata: img_metadata.into(),
             quote_token: quote_token_addr.as_ref().to_vec().into(),
             quote_amount: "10".parse().unwrap(),
@@ -2771,16 +2771,16 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy() {
     let cosmos_address_bytes = cosmos_address.to_string().into_bytes();
     println!("EVM Address: {:?}", evm_address);
 
-    // ensure_channels_opened(ctx.channel_count).await;
-    // let available_channel = ctx.get_available_channel_count().await;
-    // assert!(available_channel > 0);
-    // let pair = ctx.get_channel().await.expect("channel available");
+    ensure_channels_opened(ctx.channel_count).await;
+    let available_channel = ctx.get_available_channel_count().await;
+    assert!(available_channel > 0);
+    let pair = ctx.get_channel().await.expect("channel available");
 
-    let pair = union_test::channel_provider::ChannelPair {
-        src: 4.try_into().unwrap(),
-        dest: 18.try_into().unwrap(),
-    };
- 
+    // let pair = union_test::channel_provider::ChannelPair {
+    //     src: 4.try_into().unwrap(),
+    //     dest: 18.try_into().unwrap(),
+    // };
+
     let img_metadata = ucs03_zkgm::com::TokenMetadata {
         implementation: hex!("999709eB04e8A30C7aceD9fd920f7e04EE6B97bA")
             .to_vec()
@@ -2797,12 +2797,8 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy() {
     }
     .abi_encode_params();
 
-    let (zkgm_deployer_address, zkgm_deployer_provider) = ctx.dst.get_provider_privileged().await;
-
     let mut salt_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut salt_bytes);
-
-    let img = keccak256(&img_metadata);
 
     let quote_token_addr = ctx
         .predict_wrapped_token::<evm::Module>(
@@ -2825,23 +2821,6 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy() {
             base_amount: "10".parse().unwrap(),
             kind: TOKEN_ORDER_KIND_ESCROW, // Which is wrong, so it will revert CANNOT_DEPLOY
             metadata: img_metadata.clone().into(),
-            quote_token: quote_token_addr.as_ref().to_vec().into(),
-            quote_amount: "10".parse().unwrap(),
-        }
-        .abi_encode_params()
-        .into(),
-    };
-
-    let instruction_evm = InstructionEvm {
-        version: INSTR_VERSION_2,
-        opcode: OP_TOKEN_ORDER,
-        operand: TokenOrderV2 {
-            sender: cosmos_address_bytes.clone().into(),
-            receiver: evm_address.to_vec().into(),
-            base_token: "muno".as_bytes().into(),
-            base_amount: "10".parse().unwrap(),
-            kind: TOKEN_ORDER_KIND_ESCROW, // Which is wrong, so it will revert CANNOT_DEPLOY
-            metadata: img_metadata.into(),
             quote_token: quote_token_addr.as_ref().to_vec().into(),
             quote_amount: "10".parse().unwrap(),
         }
@@ -2887,8 +2866,117 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy() {
     );
 }
 
+async fn test_from_evm_to_union_batch_ErrInvalidBatchInstruction() {
+    let ctx = init_ctx().await;
+    let (evm_address, evm_provider) = ctx.dst.get_provider().await;
+    let (cosmos_address, cosmos_signer) = ctx.src.get_signer().await;
+    let cosmos_address_bytes = cosmos_address.to_string().into_bytes();
 
+    println!("EVM Address: {:?}", evm_address);
+    println!("Cosmos Address: {:?}", cosmos_address);
 
+    // ensure_channels_opened(ctx.channel_count).await;
+    // let available_channel = ctx.get_available_channel_count().await;
+    // assert!(available_channel > 0);
+    // let pair = ctx.get_channel().await.expect("channel available");
+
+    let pair = union_test::channel_provider::ChannelPair {
+        src: 1.try_into().unwrap(),
+        dest: 1.try_into().unwrap(),
+    };
+
+    let dst_chain_id = pair.dest;
+    let src_chain_id = pair.src;
+
+    // let deployed_erc20 = ensure_erc20(EVM_ZKGM_BYTES.into()).await;
+
+    let deployed_erc20 = ctx
+        .dst
+        .deploy_basic_erc20(EVM_ZKGM_BYTES.into(), evm_provider.clone())
+        .await
+        .expect("failed to deploy ERC20");
+
+    let union_zkgm_contract: Bech32<FixedBytes<32>> = Bech32::from_str(UNION_ZKGM_ADDRESS).unwrap();
+
+    let quote_token_addr = ctx
+        .predict_wrapped_token::<cosmos::Module>(
+            &ctx.src,
+            union_zkgm_contract,
+            ChannelId::new(NonZero::new(src_chain_id).unwrap()),
+            deployed_erc20.as_ref().to_vec(),
+            cosmos_signer,
+        )
+        .await
+        .unwrap();
+
+    let quote_token_bytes = hex_decode(quote_token_addr.trim_start_matches("0x"))
+        .expect("invalid quote‐token address hex");
+
+    println!("Quote token address: {:?}", quote_token_addr);
+    println!("deployed_erc20 address: {:?}", deployed_erc20);
+    let mut salt_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut salt_bytes);
+
+    let inner_token_order_inst = ucs03_zkgm::com::Instruction {
+        version: INSTR_VERSION_1,
+        opcode: OP_BATCH, // Using OP_BATCH to make this test fail with  ErrInvalidBatchInstruction
+        operand: TokenOrderV1 {
+            sender: evm_address.to_vec().into(),
+            receiver: cosmos_address_bytes.clone().into(),
+            base_token: deployed_erc20.as_ref().to_vec().into(),
+            base_amount: "10".parse().unwrap(),
+            base_token_symbol: "GLD".into(),
+            base_token_name: "Gold".into(),
+            base_token_decimals: 18,
+            base_token_path: "0".parse().unwrap(),
+            quote_token: quote_token_bytes.into(),
+            quote_amount: "10".parse().unwrap(),
+        }
+        .abi_encode_params()
+        .into(),
+    };
+
+    let batch_operand = ucs03_zkgm::com::Batch {
+        instructions: vec![inner_token_order_inst],
+    }
+    .abi_encode_params();
+
+    let instruction_from_evm_to_union = InstructionEvm {
+        version: INSTR_VERSION_0,
+        opcode: OP_BATCH,
+        operand: batch_operand.into(),
+    };
+
+    let ucs03_zkgm = UCS03Zkgm::new(EVM_ZKGM_BYTES.into(), evm_provider.clone());
+
+    let call = ucs03_zkgm
+        .send(
+            dst_chain_id,
+            0u64,
+            4294967295000000000u64,
+            salt_bytes.into(),
+            instruction_from_evm_to_union.clone(),
+        )
+        .clear_decoder();
+
+    let (_, zkgm_deployer_provider) = ctx.dst.get_provider_privileged().await;
+    let expected_revert_code = 0x746a20f8; // ErrInvalidBatchInstruction
+    let recv_packet_data = ctx
+        .send_and_expect_revert::<evm::Module, cosmos::Module>(
+            &ctx.dst,
+            EVM_ZKGM_BYTES.into(),
+            call,
+            expected_revert_code,
+            &zkgm_deployer_provider,
+        )
+        .await;
+
+    assert!(
+        recv_packet_data.is_ok(),
+        "Failed to send and receive packet: {:?}",
+        recv_packet_data.err()
+    );
+}
 
 // #[tokio::test]
 // async fn send_stake_and_unstake_from_evm_to_union0() {
@@ -2948,15 +3036,17 @@ async fn test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy() {
 //     self::test_from_evm_to_union_tokenv2_unhappy_ERC20InsufficientBalance().await;
 // }
 
-
 // #[tokio::test]
 // async fn from_evm_to_union_tokenv2_unhappy_path4() {
 //     self::test_from_evm_to_union_tokenv2_unhappy_ErrInvalidUnescrow().await;
 // }
 
+// #[tokio::test]
+// async fn from_evm_to_union_tokenv2_unhappy_path4() {
+//     self::test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy().await;
+// }
+
 #[tokio::test]
-async fn from_evm_to_union_tokenv2_unhappy_path4() {
-    self::test_from_evm_to_union_tokenv2_unhappy_ErrCannotDeploy().await;
+async fn from_evm_to_union_tokenv2_unhappy_path5() {
+    self::test_from_evm_to_union_batch_ErrInvalidBatchInstruction().await;
 }
-
-
