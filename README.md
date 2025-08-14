@@ -1,5 +1,5 @@
 <div align="center">
-  <picture>
+  <picture> zkgm
     <source media="(prefers-color-scheme: dark)" srcset="./.github/images/union-logo-white.svg">
     <source media="(prefers-color-scheme: light)" srcset="./.github/images/union-logo-black.svg">
     <img alt="Union"
